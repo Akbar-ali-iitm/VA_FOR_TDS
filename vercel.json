@@ -1,9 +1,19 @@
 {
   "version": 2,
   "builds": [
-    { "src": "va_for_tds.py", "use": "@vercel/python" }
+    {
+      "src": "va_for_tds.py",
+      "use": "@vercel/python",
+      "config": {
+        "maxLambdaSize": "50mb"
+      }
+    }
   ],
   "routes": [
-    { "src": "/api/?", "dest": "va_for_tds.py" }
+    {
+      "src": "/api/?",
+      "methods": ["POST"],
+      "dest": "va_for_tds.py"
+    }
   ]
 }
