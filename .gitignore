@@ -1,0 +1,41 @@
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+
+# Jupyter and logs
+.ipynb_checkpoints/
+*.log
+
+# Virtual environment (don't commit myenv or venv)
+myenv/
+venv/
+
+# Python packaging artifacts
+build/
+dist/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# VSCode config
+.vscode/
+
+# Environment config
+.env
+
+
+# FastAPI + Vercel build cache
+.vercel/
+.cache/
+*.sqlite3
+
+
+# Backup or temp files
+*.bak
+*.tmp
+*.swp
