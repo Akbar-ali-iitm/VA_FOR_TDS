@@ -18,3 +18,4 @@ requests
 google-generativeai 
 pillow
 openai
+tiktoken
