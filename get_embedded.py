@@ -1,17 +1,14 @@
 import os
-import json
 import re
+import time
+import json
 import numpy as np
 import tiktoken
 from tqdm import tqdm
-from datetime import datetime
 from pathlib import Path
-from bs4 import BeautifulSoup
 from openai import OpenAI
-import time
 
-# --- Config ---
-OPENAI_API_KEY = os.getenv("API_KEY")  # Using AIPipe API key
+OPENAI_API_KEY = os.getenv("API_KEY")
 MODEL = "text-embedding-3-small"
 CHUNK_SIZE = 200
 OVERLAP = 50
@@ -19,13 +16,22 @@ SUBCHUNK_TOKENS = 150
 OUTPUT_FILE = "embeddings.npz"
 
 # --- Setup ---
-client = OpenAI(
-    api_key=OPENAI_API_KEY,
-    base_url="https://aipipe.org/openai/v1"
-)
+client = OpenAI(api_key=OPENAI_API_KEY, base_url="https://aipipe.org/openai/v1")
 enc = tiktoken.encoding_for_model(MODEL)
 
-# --- Chunking: Course Markdown ---
+# --- Utilities ---
+def slugify(name):
+    return name.lower().replace("_", "-").replace(" ", "-")
+
+def extract_slug_id(filename):
+    match = re.match(r"(\d+)_([^.]+)\.md", filename)
+    if match:
+        topic_id = match.group(1)
+        slug = match.group(2)
+        return slug, topic_id
+    return None, None
+
+# --- Chunk Markdown Notes ---
 def split_course_markdown(text):
     sections = re.split(r"^#+\s+", text, flags=re.MULTILINE)
     chunks = []
@@ -35,26 +41,18 @@ def split_course_markdown(text):
         for para in paras:
             tokens = len(enc.encode(para))
             if current_len + tokens > CHUNK_SIZE:
-                if current:
-                    chunk = "\n\n".join(current)
-                    if len(enc.encode(chunk)) > 8192:
-                        chunks.extend(split_large_chunk(chunk))
-                    else:
-                        chunks.append(chunk)
+                chunk = "\n\n".join(current)
+                chunks.append(chunk)
                 current = [para]
                 current_len = tokens
             else:
                 current.append(para)
                 current_len += tokens
         if current:
-            chunk = "\n\n".join(current)
-            if len(enc.encode(chunk)) > 8192:
-                chunks.extend(split_large_chunk(chunk))
-            else:
-                chunks.append(chunk)
+            chunks.append("\n\n".join(current))
     return chunks
 
-# --- Chunking: Discourse Posts ---
+# --- Chunk Discourse Posts ---
 def chunk_discourse_file(text):
     chunks = []
     post_blocks = re.split(r"-{3,}\n\*{2}", text)
@@ -71,7 +69,7 @@ def chunk_discourse_file(text):
             chunks.append(post)
     return chunks
 
-# --- Further Split Large Chunks ---
+# --- Split Large Chunks ---
 def split_large_chunk(text, max_tokens=SUBCHUNK_TOKENS):
     words = text.split()
     subchunks = []
@@ -81,7 +79,7 @@ def split_large_chunk(text, max_tokens=SUBCHUNK_TOKENS):
             subchunks.append(sub)
     return subchunks
 
-# --- Embedding Function ---
+# --- Get Embedding with Retry ---
 def get_embedding(text, max_retries=3):
     for attempt in range(max_retries):
         try:
@@ -89,8 +87,7 @@ def get_embedding(text, max_retries=3):
             if tokens > 8192:
                 print(f"⚠️ Chunk too large ({tokens} tokens). Splitting...")
                 embeddings = []
-                subchunks = split_large_chunk(text)
-                for sub in subchunks:
+                for sub in split_large_chunk(text):
                     sub_emb = get_embedding(sub)
                     if sub_emb:
                         embeddings.append((sub, sub_emb))
@@ -103,25 +100,14 @@ def get_embedding(text, max_retries=3):
             )
             return response.data[0].embedding
         except Exception as e:
-            print(f"⚠️ Failed to embed (attempt {attempt+1}): {e}")
+            print(f"⚠️ Failed to embed (attempt {attempt + 1}): {e}")
             time.sleep(2 ** attempt)
     return None
 
-# --- Extract slug and ID from filename for URL reconstruction ---
-def extract_slug_id(filename):
-    match = re.match(r"(\d+)_([^.]+)\.md", filename)
-    if match:
-        topic_id = match.group(1)
-        slug = match.group(2)
-        return slug, topic_id
-    return None, None
-
-# --- Main Embedding Generation ---
+# --- Main Embedding Generator ---
 if __name__ == "__main__":
     folders = ["tds_markdown", "tds_discourse_md"]
-    all_chunks = []
-    all_embeddings = []
-    metas = []
+    all_chunks, all_embeddings, metas = [], [], []
 
     files = []
     for folder in folders:
@@ -131,10 +117,8 @@ if __name__ == "__main__":
         with open(file_path, encoding="utf-8") as f:
             text = f.read()
 
-        if "tds_markdown" in str(file_path):
-            chunks = split_course_markdown(text)
-        else:
-            chunks = chunk_discourse_file(text)
+        is_discourse = "tds_discourse_md" in str(file_path)
+        chunks = chunk_discourse_file(text) if is_discourse else split_course_markdown(text)
 
         for i, chunk in enumerate(chunks):
             embedding = get_embedding(chunk)
@@ -146,10 +130,13 @@ if __name__ == "__main__":
                             "chunk_id": f"{i}_{j}",
                             "text": subchunk[:200].replace("\n", " ")
                         }
-                        if "tds_discourse_md" in str(file_path):
+                        if is_discourse:
                             slug, topic_id = extract_slug_id(file_path.name)
                             if slug and topic_id:
                                 meta["url"] = f"https://discourse.onlinedegree.iitm.ac.in/t/{slug}/{topic_id}/{i}"
+                        else:
+                            slug = slugify(file_path.stem)
+                            meta["url"] = f"https://tds.s-anand.net/#/{slug}"
                         all_chunks.append(subchunk)
                         all_embeddings.append(emb)
                         metas.append(meta)
@@ -159,10 +146,13 @@ if __name__ == "__main__":
                         "chunk_id": i,
                         "text": chunk[:200].replace("\n", " ")
                     }
-                    if "tds_discourse_md" in str(file_path):
+                    if is_discourse:
                         slug, topic_id = extract_slug_id(file_path.name)
                         if slug and topic_id:
                             meta["url"] = f"https://discourse.onlinedegree.iitm.ac.in/t/{slug}/{topic_id}/{i}"
+                    else:
+                        slug = slugify(file_path.stem)
+                        meta["url"] = f"https://tds.s-anand.net/#/{slug}"
                     all_chunks.append(chunk)
                     all_embeddings.append(embedding)
                     metas.append(meta)
